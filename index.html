@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Afinador de Violão</title>
+
+<style>
+/* ================= BASE ================= */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+body {
+  height: 100vh;
+  background: radial-gradient(circle at top, #1e1e2f, #0f0f17);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.container {
+  width: 420px;
+  padding: 40px;
+  border-radius: 24px;
+  background: rgba(255,255,255,0.05);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+  text-align: center;
+}
+
+h1 {
+  font-size: 24px;
+  margin-bottom: 30px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+
+/* ================= STRINGS ================= */
+.strings {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  margin-bottom: 25px;
+}
+
+.strings button {
+  padding: 10px;
+  border-radius: 12px;
+  border: none;
+  background: rgba(255,255,255,0.08);
+  color: white;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.strings button.active {
+  background: #4c6ef5;
+  font-weight: 600;
+  box-shadow: 0 0 10px rgba(76,110,245,0.6);
+}
+
+.strings button:hover {
+  background: rgba(255,255,255,0.15);
+}
+
+/* ================= DISPLAY ================= */
+.frequency {
+  font-size: 32px;
+  margin: 20px 0 10px 0;
+  font-weight: 500;
+}
+
+.status {
+  font-size: 18px;
+  margin-bottom: 25px;
+  height: 24px;
+}
+
+/* ================= METER ================= */
+.meter {
+  position: relative;
+  height: 120px;
+  margin-bottom: 30px;
+}
+
+.arc {
+  width: 100%;
+  height: 100%;
+  border-bottom: 4px solid rgba(255,255,255,0.1);
+  border-radius: 50%;
+}
+
+.needle {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 4px;
+  height: 100px;
+  background: #ff6b6b;
+  transform-origin: bottom;
+  transform: rotate(0deg);
+  transition: transform 0.1s linear;
+}
+
+/* ================= BUTTON ================= */
+.start-btn {
+  padding: 12px 20px;
+  border-radius: 14px;
+  border: none;
+  background: #20c997;
+  color: black;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.start-btn.stop {
+  background: #ff6b6b;
+  color: white;
+}
+
+.start-btn:hover {
+  opacity: 0.9;
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+  <h1>Afinador de Violão</h1>
+
+  <div class="strings" id="strings"></div>
+
+  <div class="frequency" id="frequency">-- Hz</div>
+  <div class="status" id="status"></div>
+
+  <div class="meter">
+    <div class="arc"></div>
+    <div class="needle" id="needle"></div>
+  </div>
+
+  <button class="start-btn" id="toggleBtn">Iniciar Microfone</button>
+</div>
+
+<script>
+/* ================= CONFIG ================= */
+const strings = [
+  { note: "E2", freq: 82.41 },
+  { note: "A2", freq: 110.00 },
+  { note: "D3", freq: 146.83 },
+  { note: "G3", freq: 196.00 },
+  { note: "B3", freq: 246.94 },
+  { note: "E4", freq: 329.63 }
+];
+
+let selectedIndex = 1;
+let audioContext = null;
+let analyser = null;
+let stream = null;
+let animationId = null;
+
+const stringsContainer = document.getElementById("strings");
+const frequencyDisplay = document.getElementById("frequency");
+const statusDisplay = document.getElementById("status");
+const needle = document.getElementById("needle");
+const toggleBtn = document.getElementById("toggleBtn");
+
+/* ================= INIT STRINGS ================= */
+function renderStrings() {
+  stringsContainer.innerHTML = "";
+
+  strings.forEach((string, index) => {
+    const btn = document.createElement("button");
+    btn.innerText = string.note;
+
+    if (index === selectedIndex) {
+      btn.classList.add("active");
+    }
+
+    btn.onclick = () => {
+      selectedIndex = index;
+      renderStrings();
+    };
+
+    stringsContainer.appendChild(btn);
+  });
+}
+
+renderStrings();
+
+/* ================= TOGGLE MICROPHONE ================= */
+toggleBtn.onclick = async () => {
+  if (!audioContext) {
+    await startTuner();
+    toggleBtn.innerText = "Parar";
+    toggleBtn.classList.add("stop");
+  } else {
+    stopTuner();
+    toggleBtn.innerText = "Iniciar Microfone";
+    toggleBtn.classList.remove("stop");
+  }
+};
+
+async function startTuner() {
+  stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  audioContext = new AudioContext();
+  const source = audioContext.createMediaStreamSource(stream);
+
+  analyser = audioContext.createAnalyser();
+  analyser.fftSize = 2048;
+  source.connect(analyser);
+
+  const buffer = new Float32Array(analyser.fftSize);
+
+  function detect() {
+    analyser.getFloatTimeDomainData(buffer);
+    const freq = autoCorrelate(buffer, audioContext.sampleRate);
+
+    if (freq !== -1) updateUI(freq);
+
+    animationId = requestAnimationFrame(detect);
+  }
+
+  detect();
+}
+
+function stopTuner() {
+  cancelAnimationFrame(animationId);
+
+  if (stream) {
+    stream.getTracks().forEach(track => track.stop());
+  }
+
+  if (audioContext) {
+    audioContext.close();
+  }
+
+  audioContext = null;
+  analyser = null;
+  stream = null;
+
+  frequencyDisplay.innerText = "-- Hz";
+  statusDisplay.innerText = "";
+  needle.style.transform = "rotate(0deg)";
+}
+
+/* ================= UPDATE UI ================= */
+function updateUI(freq) {
+  frequencyDisplay.innerText = freq.toFixed(2) + " Hz";
+
+  const target = strings[selectedIndex].freq;
+  const diff = freq - target;
+
+  if (Math.abs(diff) < 1) {
+    statusDisplay.innerText = "✔ Afinado";
+    statusDisplay.style.color = "#51cf66";
+  } else if (diff > 0) {
+    statusDisplay.innerText = "⬆ Muito Agudo";
+    statusDisplay.style.color = "#ff922b";
+  } else {
+    statusDisplay.innerText = "⬇ Muito Grave";
+    statusDisplay.style.color = "#ff6b6b";
+  }
+
+  const angle = Math.max(-45, Math.min(45, diff * 3));
+  needle.style.transform = `rotate(${angle}deg)`;
+}
+
+/* ================= AUTOCORRELATION ================= */
+function autoCorrelate(buffer, sampleRate) {
+  let SIZE = buffer.length;
+  let rms = 0;
+
+  for (let i = 0; i < SIZE; i++) {
+    rms += buffer[i] * buffer[i];
+  }
+  rms = Math.sqrt(rms / SIZE);
+  if (rms < 0.01) return -1;
+
+  let r1 = 0, r2 = SIZE - 1, threshold = 0.2;
+  for (let i = 0; i < SIZE / 2; i++) {
+    if (Math.abs(buffer[i]) < threshold) { r1 = i; break; }
+  }
+  for (let i = 1; i < SIZE / 2; i++) {
+    if (Math.abs(buffer[SIZE - i]) < threshold) { r2 = SIZE - i; break; }
+  }
+
+  buffer = buffer.slice(r1, r2);
+  SIZE = buffer.length;
+
+  let c = new Array(SIZE).fill(0);
+  for (let i = 0; i < SIZE; i++) {
+    for (let j = 0; j < SIZE - i; j++) {
+      c[i] += buffer[j] * buffer[j + i];
+    }
+  }
+
+  let d = 0;
+  while (c[d] > c[d + 1]) d++;
+
+  let maxval = -1, maxpos = -1;
+  for (let i = d; i < SIZE; i++) {
+    if (c[i] > maxval) {
+      maxval = c[i];
+      maxpos = i;
+    }
+  }
+
+  if (maxpos === -1) return -1;
+
+  return sampleRate / maxpos;
+}
+</script>
+
+</body>
+</html>
